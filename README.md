@@ -18,7 +18,7 @@ numpy
 pygame
 Setup
 git clone https://github.com/EclipselaserX/BlackholePython.git
-cd YOUR_REPO_NAME
+cd BlackholePython
 pip install moderngl numpy pygame
 python main.py
 License
