@@ -9,10 +9,13 @@ Toggleable accretion disk
 <img width="4096" height="2864" alt="Gargantua_MultiMatrix_4096x2864_1783061410" src="https://github.com/user-attachments/assets/9d994c82-639d-410c-a5c9-36b9bd375404" />
 
 Doppler effect
+<img width="3840" height="1606" alt="Gargantua_final_FINAL2qiqp" src="https://github.com/user-attachments/assets/504b630c-4846-4413-b9b1-da6cf2196785" />
 
-<img width="4096" height="2864" alt="Gargantua_MultiMatrix_4096x2864_1783061410" src="https://github.com/user-attachments/assets/025b2408-cf00-40b1-9d87-d7b7d81aace1" />
 Multi-body black hole support
 Adjustable lensing and star density controls
+<img width="3840" height="2160" alt="Gargantua_MultiMatrix_3840x2160_1783141788" src="https://github.com/user-attachments/assets/4f3eccf2-a120-409c-a4f2-d331037fc395" />
+<img width="3840" height="2160" alt="Gargantua_MultiMatrix_3840x2160_1783141820" src="https://github.com/user-attachments/assets/a6c90959-5efc-44ac-8695-2abc4030cce2" />
+
 Interface-free screenshot mode
 Project Status
 Main Branch: Source code for v0.5 Alpha (baseline lensing engine).
