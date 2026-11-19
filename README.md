@@ -1,6 +1,7 @@
 
 <img width="3840" height="2160" alt="Gargantua_MultiMatrix_3840x2160_1783141193" src="https://github.com/user-attachments/assets/75b50bc1-1131-4365-ac63-ab8e39610462" />
 Volumetric Black Hole Simulator
+PRESS H FOR CONTROLS
 An interactive simulator using ModernGL, NumPy, and Pygame to render general relativity effects.
 Features
 Volumetric rendering (gas/plasma)
@@ -15,11 +16,7 @@ Multi-body black hole support
 Adjustable lensing and star density controls
 <img width="3840" height="2160" alt="Gargantua_MultiMatrix_3840x2160_1783141788" src="https://github.com/user-attachments/assets/4f3eccf2-a120-409c-a4f2-d331037fc395" />
 <img width="3840" height="2160" alt="Gargantua_MultiMatrix_3840x2160_1783141820" src="https://github.com/user-attachments/assets/a6c90959-5efc-44ac-8695-2abc4030cce2" />
-
-Interface-free screenshot mode
-Project Status
-Main Branch: Source code for v0.5 Alpha (baseline lensing engine).
-Latest Build: Feature-complete compiled binary available in the Releases tab as Release V-1.
+Screenshot mode
 Prerequisites
 Python 3.8+
 moderngl
