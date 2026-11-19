@@ -30,6 +30,7 @@ git clone https://github.com/EclipselaserX/BlackholePython.git
 cd BlackholePython
 pip install moderngl numpy pygame
 python main.py
-License
-Licensed under CC BY-NC-SA 4.0 (Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International). See LICENSE.md for details.
+## License
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
+
 <img width="3840" height="1606" alt="Gargantua_Volumetric3D_4K_1782208819" src="https://github.com/user-attachments/assets/3ef30bf7-8030-4182-890c-51aed8ab2cdf" />
