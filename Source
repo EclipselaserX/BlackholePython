@@ -1,9 +1,19 @@
-# Blackhole Ultra V4 - Dynamic 3D Volumetric LOD Engine
-# 3/4 lens strength
-# 5/6 turbulence scale
-# 7/8 stars density
+
+# 1/2 lens strength (selected BH)
+# 3/4 turbulence scale (selected BH)
+# 5/6 stars density (global environment)
+# 7/8 doppler blueshift (selected BH)
+# [ / ] - Adjust Shadow Size of selected BH
+# N - Spawn a new Black Hole directly in front of camera (with collision check)
+# LEFT CLICK - Select BH in viewport (Sets camera pivot & opens panel controls)
+# MIDDLE CLICK HOLD - Pan the camera freely in 3D space
+# LEFT CLICK HOLD - Rotate around current pivot target
+# B - Toggle Accretion Disk Volumetrics & Glow completely for selected BH
+# ARROW KEYS LEFT/RIGHT - Photon ring thickness (selected BH)
+# CTRL - Toggle Side Control Panel Menu
+# F1 - Toggle Balanced Performance Mode
 # F9 reset parameters smoothly
-# F10 toggle surf flight mode
+# TAB toggle surf flight mode (FLY NEAR THE HOLE FOR RELATIVISTIC EFFECTS)
 # F11 toggle windowed fullscreen
 # F12 export cinematic 4K UHD image
 
@@ -17,12 +27,49 @@ import math
 import tkinter as tk
 from tkinter import filedialog
 
-# Initialize Pygame
+# Initialize Pygame Base Engine Components
 pygame.init()
+
+# -------------------------------------------------------------------------
+# SPLASH WINDOW SEQUENCE
+# -------------------------------------------------------------------------
+SPLUSH_W, SPLASH_H = 420, 180
+screen = pygame.display.set_mode((SPLUSH_W, SPLASH_H), pygame.NOFRAME)
+pygame.display.set_caption("Blackhole Engine V7 - Initialization")
+
+font_cmd = pygame.font.SysFont("Consolas, Lucida Console, Courier New", 14)
+splash_clock = pygame.time.Clock()
+splash_start_time = time.time()
+splash_duration = 1.2
+
+while time.time() - splash_start_time < splash_duration:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            pygame.quit()
+            sys.exit()
+
+    screen.fill((0, 0, 0))
+    pygame.draw.rect(screen, (35, 38, 46), (0, 0, SPLUSH_W, SPLASH_H), width=1)
+
+    elapsed = time.time() - splash_start_time
+    cursor = "_" if int(elapsed * 4) % 2 == 0 else ""
+
+    status_text = f"Purging visual artifacts{cursor}"
+    text_surface = font_cmd.render(status_text, True, (220, 225, 240))
+    screen.blit(text_surface, (24, 24))
+
+    details_surface = font_cmd.render("CORE::V7_CLEAN_HORIZON_READY", True, (80, 85, 100))
+    screen.blit(details_surface, (24, SPLASH_H - 38))
+
+    pygame.display.flip()
+    splash_clock.tick(60)
+
+# -------------------------------------------------------------------------
+# INITIALIZE OPENGL PIPELINE
+# -------------------------------------------------------------------------
 SCREEN_WIDTH, SCREEN_HEIGHT = 1280, 720
-# Added pygame.RESIZABLE flag to allow manual window sizing
 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE)
-pygame.display.set_caption("Blackhole Engine V5")
+pygame.display.set_caption("Blackhole Engine V7.1 - Cinematic Clean Edition")
 clock = pygame.time.Clock()
 
 ctx = moderngl.create_context()
@@ -53,10 +100,7 @@ in vec2 uv;
 out vec4 fragColor;
 // Cache Buster Timestamp: """ + unique_id + """
 
-#define M 1.0
-#define RS 2.0
-#define ISCO 6.0
-#define MAX_STEPS 256
+#define MAX_BH 4
 
 uniform vec2 u_resolution;
 uniform vec3 u_cam_pos;
@@ -64,11 +108,21 @@ uniform vec3 u_cam_dir;
 uniform vec3 u_cam_up;
 uniform vec3 u_cam_right;
 uniform float u_time;
-uniform float u_ring_sharpness;
 uniform float u_bloom_intensity;
 uniform float u_lens_strength;     
-uniform float u_turbulence;        
 uniform float u_star_density;      
+uniform float u_exposure;
+uniform int u_low_quality; 
+
+// Multi-Black Hole Uniform Arrays
+uniform int u_num_bh;
+uniform vec3 u_bh_pos[MAX_BH];
+uniform float u_bh_shadow_size[MAX_BH];
+uniform float u_bh_lens_strength[MAX_BH];
+uniform float u_bh_turbulence[MAX_BH];
+uniform float u_bh_ring_sharpness[MAX_BH];
+uniform int u_bh_accretion_enabled[MAX_BH];
+uniform float u_bh_doppler_blue[MAX_BH];
 
 float hash(vec3 p) {
     p = fract(p * vec3(443.8975, 397.2973, 491.1871));
@@ -86,12 +140,16 @@ float noise3D(vec3 p) {
                    mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
 }
 
-float deep_fbm(vec3 p) {
+float deep_fbm(vec3 p, float turb_scale) {
     float v = 0.0;
     float a = 0.55;
     vec3 shift = vec3(100.0);
-    p += noise3D(p * 0.5) * 0.35;
-    for (int i = 0; i < 6; i++) {
+    if (u_low_quality == 0) {
+        p += noise3D(p * 0.5) * 0.35;
+    }
+
+    int octaves = (u_low_quality == 1) ? 3 : 6;
+    for (int i = 0; i < octaves; i++) {
         v += a * noise3D(p);
         p = p * 2.25 + shift;
         a *= 0.45;
@@ -99,7 +157,7 @@ float deep_fbm(vec3 p) {
     return v;
 }
 
-float get_volumetric_debris(vec3 sample_pos, float r, float dist_to_cam, float outer_fade) {
+float get_volumetric_debris(vec3 sample_pos, float r, float dist_to_cam, float outer_fade, float turb_scale) {
     float speed = (5.0 / (r + 0.5)) * u_time;
     float cos_s = cos(speed);
     float sin_s = sin(speed);
@@ -108,11 +166,13 @@ float get_volumetric_debris(vec3 sample_pos, float r, float dist_to_cam, float o
         sample_pos.y,
         sample_pos.x * sin_s + sample_pos.z * cos_s
     );
+    float radial_drift = noise3D(sheared_p * 0.5 + vec3(0.0, 0.0, u_time * 0.15));
+    sheared_p += normalize(vec3(sheared_p.x, 0.0, sheared_p.z)) * radial_drift * u_time * 0.25;
 
     float lod_factor = smoothstep(22.0, 4.0, dist_to_cam);
-    float macro_noise = deep_fbm(sheared_p * 0.75);
+    float macro_noise = deep_fbm(sheared_p * 0.75, turb_scale);
 
-    vec3 micro_p = sheared_p * vec3(4.5, 9.0, 4.5) * u_turbulence;
+    vec3 micro_p = sheared_p * vec3(4.5, 9.0, 4.5) * turb_scale;
     float micro_clumps = noise3D(micro_p + vec3(0.0, u_time * 0.2, 0.0));
 
     float vertical_displacement = micro_clumps * 0.35 * lod_factor * outer_fade;
@@ -127,138 +187,214 @@ float get_volumetric_debris(vec3 sample_pos, float r, float dist_to_cam, float o
 
 float get_star_field(vec3 rd) {
     float stars = 0.0;
+    float dense_mod = (u_low_quality == 1) ? 0.65 : 1.0; 
     vec3 p1 = rd * 140.0;
-    if (hash(floor(p1)) > (1.0 - 0.006 * u_star_density)) stars += pow(smoothstep(0.7, 1.0, hash(p1)), 6.0) * 1.5;
+    if (hash(floor(p1)) > (1.0 - 0.006 * u_star_density * dense_mod)) stars += pow(smoothstep(0.7, 1.0, hash(p1)), 6.0) * 1.5;
     vec3 p2 = rd * 380.0;
-    if (hash(floor(p2)) > (1.0 - 0.003 * u_star_density)) stars += pow(smoothstep(0.8, 1.0, hash(p2)), 4.0) * 0.9;
+    if (hash(floor(p2)) > (1.0 - 0.003 * u_star_density * dense_mod)) stars += pow(smoothstep(0.8, 1.0, hash(p2)), 4.0) * 0.9;
     return stars;
 }
 
-void main() {
-    vec2 st = uv * vec2(u_resolution.x / u_resolution.y, 1.0);
-
-    vec3 rd = normalize(st.x * u_cam_right + st.y * u_cam_up + 2.0 * u_cam_dir);
-    vec3 p = u_cam_pos;
-
+vec4 raymarch_scene(vec3 ro, vec3 rd, float color_shift_factor) {
+    vec3 p = ro;
     vec3 acc_color = vec3(0.0);
     float optical_depth = 0.0;
-    float min_r = 999.0;
 
-    float photon_ring_radius = M * 3.0;
-    float dynamic_inner_edge = photon_ring_radius - (4.0 / u_ring_sharpness);
+    float min_r_global = 9999.0;
+    int global_closest_j = 0;
+    bool hit_horizon_global = false;
 
     vec3 total_bloom = vec3(0.0);
-    bool hit_horizon = false; 
-
     float slow_time = u_time * 0.4;
 
-    for (int i = 0; i < MAX_STEPS; i++) {
-        float r2 = dot(p, p);
-        float r = sqrt(r2);
+    int max_engine_steps = (u_low_quality == 1) ? 128 : 320;
+    int adaptive_max_steps = max_engine_steps;
 
-        if (!hit_horizon && r < min_r) min_r = r;
+    float closest_initial_r = 9999.0;
+    for(int j=0; j<u_num_bh; j++) {
+        closest_initial_r = min(closest_initial_r, length(p - u_bh_pos[j]));
+    }
 
-        if (r < dynamic_inner_edge) {
-            hit_horizon = true;
+    if (u_low_quality == 0) {
+        if (closest_initial_r > 80.0) { adaptive_max_steps = 180; }
+        else if (closest_initial_r < 18.0) { adaptive_max_steps = 320; }
+    } else {
+        if (closest_initial_r > 80.0) { adaptive_max_steps = 96; }
+        else if (closest_initial_r < 18.0) { adaptive_max_steps = 128; }
+    }
+
+    float extreme_proximity = smoothstep(18.0, 2.0, closest_initial_r);
+    float dynamic_noise = noise3D(vec3(p.x * 0.1, p.y * 0.1, u_time * 1.8));
+    float micro_lens_fluctuation = 1.0 + (dynamic_noise - 0.5) * 0.045; 
+
+    for (int i = 0; i < max_engine_steps; i++) {
+        if (i >= adaptive_max_steps) break;
+        if (length(p - u_cam_pos) > 1500.0) break; // Massively increased render distance
+
+        vec3 total_gravity = vec3(0.0);
+        float min_step_r = 9999.0;
+        int step_closest_j = 0;
+
+        for (int j = 0; j < u_num_bh; j++) {
+            vec3 to_bh = p - u_bh_pos[j];
+            float r2 = dot(to_bh, to_bh);
+            float r = sqrt(r2);
+
+            if (r < min_step_r) {
+                min_step_r = r;
+                step_closest_j = j;
+            }
+
+            float dynamic_inner_edge = u_bh_shadow_size[j] - (4.0 / u_bh_ring_sharpness[j]);
+            if (r < dynamic_inner_edge) {
+                hit_horizon_global = true;
+            }
+
+            float bh_m = u_bh_shadow_size[j] / 3.0; 
+            vec3 grav = -1.5 * bh_m * to_bh / (r2 * r) * u_bh_lens_strength[j] * u_lens_strength * micro_lens_fluctuation * color_shift_factor;
+            total_gravity += grav;
         }
 
-        if (r > 250.0) {
-            break;
+        if (hit_horizon_global) break;
+
+        if (min_step_r < min_r_global) {
+            min_r_global = min_step_r;
+            global_closest_j = step_closest_j;
         }
 
-        float base_dt = max(0.035, (r - RS) * 0.095);
-        if (r > 30.0) {
-            base_dt = 0.035 + (r - RS) * 0.18;
-        }
+        float base_dt = max(0.035, (min_step_r - 2.0) * 0.095);
+        if (min_step_r > 60.0) { base_dt = 0.035 + (min_step_r - 2.0) * 0.25; } // Step faster when far away
 
-        float proximity_to_disk = abs(p.y);
+        float proximity_to_disk = abs(p.y - u_bh_pos[step_closest_j].y);
         float dt = mix(base_dt * 0.4, base_dt, smoothstep(0.0, 1.2, proximity_to_disk));
+        if (u_low_quality == 1) { dt *= 1.2; }
 
-        vec3 gravity = -1.5 * M * p / (r2 * r) * u_lens_strength;
-
-        rd = normalize(rd + gravity * dt);
+        rd = normalize(rd + total_gravity * dt);
         p += rd * dt;
 
-        vec3 disk_vel = normalize(cross(vec3(0.0, 1.0, 0.0), p));
-        float cos_alpha = dot(rd, disk_vel);
-        float v = 1.0 / sqrt(max(RS + 0.1, r));
-        float gamma = 1.0 / sqrt(1.0 - v*v);
-        float step_doppler = 1.0 / (gamma * (1.0 - v * cos_alpha));
-        float step_redshift = sqrt(max(0.001, 1.0 - RS / r));
-        float step_beaming = pow(step_doppler, 3.5);
+        for (int j = 0; j < u_num_bh; j++) {
+            vec3 to_bh = p - u_bh_pos[j];
+            float r = length(to_bh);
+            float isco = u_bh_shadow_size[j] * 2.0;
+            float max_disk_r = isco * 4.3;
 
-        // --- ACCRETION DISK ---
-        float disk_height = mix(0.4, 0.95, smoothstep(ISCO, 24.0, r)); 
-        if (abs(p.y) < disk_height && r >= ISCO && r < 26.0) {
-            float texture_rotation = slow_time * (3.2 / (r * sqrt(r)));
-            float angle = atan(p.z, p.x) - texture_rotation;
+            if (u_bh_accretion_enabled[j] == 1) {
+                float disk_height = mix(0.4, 0.95, smoothstep(isco, max_disk_r, r));
+                if (abs(to_bh.y) < disk_height && r >= isco && r < max_disk_r) {
+                    vec3 disk_vel = normalize(cross(vec3(0.0, 1.0, 0.0), to_bh));
+                    float cos_alpha = dot(rd, disk_vel);
+                    float rs_local = isco / 3.0;
+                    float v = 1.0 / sqrt(max(rs_local + 0.1, r));
+                    float gamma = 1.0 / sqrt(1.0 - v*v);
+                    float step_doppler = 1.0 / (gamma * (1.0 - v * cos_alpha));
+                    float step_redshift = sqrt(max(0.001, 1.0 - rs_local / r));
+                    float step_beaming = pow(step_doppler, 3.5);
 
-            vec3 noise_pos = vec3(cos(angle)*r, p.y * 2.0, sin(angle)*r);
-            float dist_to_cam = distance(p, u_cam_pos);
-            float outer_fade = smoothstep(7.5, 22.0, r);
+                    float texture_rotation = slow_time * (3.2 / (r * sqrt(r)));
+                    float angle = atan(to_bh.z, to_bh.x) - texture_rotation;
 
-            float volumetric_features = get_volumetric_debris(noise_pos, r, dist_to_cam, outer_fade);
+                    vec3 noise_pos = vec3(cos(angle)*r, to_bh.y * 2.0, sin(angle)*r);
+                    float dist_to_cam = distance(p, u_cam_pos);
+                    float outer_fade = smoothstep(isco * 1.2, max_disk_r, r);
 
-            float base_density = smoothstep(26.0, 9.0, r) * smoothstep(ISCO - 0.2, ISCO + 1.5, r);
-            base_density *= (1.0 - abs(p.y) / disk_height);
+                    float volumetric_features = get_volumetric_debris(noise_pos, r, dist_to_cam, outer_fade, u_bh_turbulence[j]);
+                    float base_density = smoothstep(max_disk_r, isco * 1.5, r) * smoothstep(isco - 0.2, isco + 1.5, r);
+                    base_density *= (1.0 - abs(to_bh.y) / disk_height);
 
-            float dynamic_edge = mix(0.15, 0.38, outer_fade);
-            float final_density = base_density * smoothstep(dynamic_edge, 0.78, volumetric_features);
+                    float dynamic_edge = mix(0.15, 0.38, outer_fade);
+                    float final_density = base_density * smoothstep(dynamic_edge, 0.78, volumetric_features);
 
-            float mouth_glow_factor = exp(-(r - ISCO) * 0.45);
-            vec3 inner_core_heat = vec3(1.5, 1.35, 1.1) * 3.5 * step_beaming;
-            vec3 outer_gas = vec3(0.98, 0.52, 0.18) * step_doppler * step_redshift;
+                    float density_shadow = exp(-final_density * 1.95);
+                    final_density *= density_shadow;
+                    float mouth_glow_factor = exp(-(r - isco) * 0.45);
+                    vec3 inner_core_heat = vec3(1.5, 1.35, 1.1) * 3.5 * step_beaming;
+                    vec3 outer_gas = vec3(0.98, 0.52, 0.18) * step_doppler * step_redshift;
 
-            vec3 current_gas_color = mix(outer_gas, inner_core_heat, mouth_glow_factor);
+                    vec3 current_gas_color = mix(outer_gas, inner_core_heat, mouth_glow_factor);
+                    if (cos_alpha > 0.0) {
+                        float blue_factor = smoothstep(0.0, 1.0, cos_alpha);
+                        vec3 target_blue = vec3(0.35, 0.68, 1.0) * step_beaming * 1.5 * u_bh_doppler_blue[j];
+                        current_gas_color = mix(current_gas_color, target_blue, blue_factor * (0.55 * (1.0 - mouth_glow_factor)));
+                    }
 
-            if (cos_alpha > 0.0) {
-                float blue_factor = smoothstep(0.0, 1.0, cos_alpha);
-                vec3 target_blue = vec3(0.35, 0.68, 1.0) * step_beaming * 1.5;
-                current_gas_color = mix(current_gas_color, target_blue, blue_factor * (0.55 * (1.0 - mouth_glow_factor)));
+                    vec3 extreme_plasma = vec3(0.65, 0.85, 1.0) * 9.0 * step_doppler;
+                    current_gas_color = mix(current_gas_color, extreme_plasma, extreme_proximity * 0.9);
+
+                    float step_absorption = final_density * dt * 1.45;
+                    acc_color += exp(-optical_depth) * current_gas_color * step_absorption;
+                    optical_depth += step_absorption;
+
+                    if (optical_depth > 5.5) break;
+                }
+
+                float glow_range = max_disk_r;
+                if (r >= isco - 1.2 && r < glow_range) {
+                    vec3 disk_vel = normalize(cross(vec3(0.0, 1.0, 0.0), to_bh));
+                    float cos_alpha = dot(rd, disk_vel);
+                    float v = 1.0 / sqrt(max((isco/3.0) + 0.1, r));
+                    float gamma = 1.0 / sqrt(1.0 - v*v);
+                    float step_doppler = 1.0 / (gamma * (1.0 - v * cos_alpha));
+                    float step_beaming = pow(step_doppler, 3.5);
+
+                    float base_falloff = smoothstep(glow_range, isco, r) * (1.0 / (1.0 + abs(to_bh.y) * 3.5));
+                    float inner_mouth_boost = exp(-(r - isco) * 0.35) * 2.0;
+
+                    float bloom_layer1 = exp(-abs(to_bh.y) * 3.0) * base_falloff;
+                    float bloom_layer2 = exp(-abs(to_bh.y) * 0.8) * base_falloff * 0.4;
+                    float bloom_layer3 = exp(-abs(to_bh.y) * 0.15) * base_falloff * 0.08;
+                    float combined_falloff = (bloom_layer1 + bloom_layer2 + bloom_layer3) * (1.0 + inner_mouth_boost);
+                    vec3 localized_bloom_color = mix(vec3(0.98, 0.38, 0.12), vec3(1.0, 0.95, 0.85), step_beaming * 0.4);
+                    total_bloom += exp(-optical_depth) * localized_bloom_color * combined_falloff * step_beaming * dt * 0.22 * u_bloom_intensity;
+                }
             }
-
-            float step_absorption = final_density * dt * 1.45;
-            acc_color += exp(-optical_depth) * current_gas_color * step_absorption;
-            optical_depth += step_absorption;
-
-            if (optical_depth > 5.5) {
-                break;
-            }
-        }
-
-        // --- LAYERED BLOOM ENGINE ---
-        #define GLOW_RANGE 24.0
-        if (r >= ISCO - 1.2 && r < GLOW_RANGE) {
-            float base_falloff = smoothstep(GLOW_RANGE, ISCO, r) * (1.0 / (1.0 + proximity_to_disk * 3.5));
-            float inner_mouth_boost = exp(-(r - ISCO) * 0.35) * 2.0;
-
-            float bloom_layer1 = exp(-proximity_to_disk * 3.0) * base_falloff;
-            float bloom_layer2 = exp(-proximity_to_disk * 0.8) * base_falloff * 0.4;
-            float bloom_layer3 = exp(-proximity_to_disk * 0.15) * base_falloff * 0.08;
-            float combined_falloff = (bloom_layer1 + bloom_layer2 + bloom_layer3) * (1.0 + inner_mouth_boost);
-
-            vec3 localized_bloom_color = mix(vec3(0.98, 0.38, 0.12), vec3(1.0, 0.95, 0.85), step_beaming * 0.4);
-            total_bloom += exp(-optical_depth) * localized_bloom_color * combined_falloff * step_beaming * dt * 0.22 * u_bloom_intensity;
         }
     }
 
     acc_color += total_bloom;
 
-    if (min_r > dynamic_inner_edge && min_r < 900.0) {
-        float delta_r = abs(min_r - photon_ring_radius);
-        float ring_density = exp(-delta_r * u_ring_sharpness);
+    if (!hit_horizon_global && min_r_global < 1500.0) {
+        float photon_ring_radius = u_bh_shadow_size[global_closest_j];
+        float delta_r = abs(min_r_global - photon_ring_radius);
+        float ring_density = exp(-delta_r * u_bh_ring_sharpness[global_closest_j]);
         vec3 ring_glow = vec3(1.0, 0.82, 0.55) * ring_density * 4.5;
         acc_color += exp(-optical_depth) * ring_glow;
     }
 
-    vec3 background = vec3(0.001, 0.0008, 0.002); 
-    if (!hit_horizon && min_r > dynamic_inner_edge && optical_depth < 5.5) {
-        vec3 lensed_rd = normalize(rd);
-        float stars = get_star_field(lensed_rd);
+    // Deep Space 
+    vec3 background = vec3(0.001, 0.0008, 0.002);
+    if (!hit_horizon_global && optical_depth < 5.5) {
+        float stars = get_star_field(normalize(rd));
         background += vec3(0.92, 0.95, 1.0) * stars;
     }
 
-    vec3 final_rgb = hit_horizon ? acc_color : (acc_color + exp(-optical_depth) * background);
+    float horizon_fade = smoothstep(u_bh_shadow_size[global_closest_j] - 0.2, u_bh_shadow_size[global_closest_j] + 0.1, min_r_global);
+    vec3 composite = mix(acc_color, (acc_color + exp(-optical_depth) * background), horizon_fade);
+
+    return vec4(composite, min_r_global);
+}
+
+void main() {
+    float closest_cam_r = 9999.0;
+    for(int j=0; j<u_num_bh; j++) {
+        closest_cam_r = min(closest_cam_r, length(u_cam_pos - u_bh_pos[j]));
+    }
+
+    float tidal_force = smoothstep(18.0, 2.0, closest_cam_r);
+    float aberration = 1.0 - tidal_force * 0.65 * dot(uv, uv);
+    vec2 st = uv * vec2(u_resolution.x / u_resolution.y, 1.0) / max(0.1, aberration);
+
+    // REMOVED WAVE RIPPLE TO FIX PIXELATED ARTIFACTS
+    vec3 rd = normalize(st.x * u_cam_right + st.y * u_cam_up + 2.0 * u_cam_dir);
+    vec3 p = u_cam_pos;
+
+    // Core single pass raymarch (Pure, pristine shadow)
+    vec4 core_sample = raymarch_scene(p, rd, 1.0);
+    vec3 final_rgb = core_sample.rgb; // REMOVED 3-PASS CHROMATIC ABERRATION TO PREVENT JAGGY EDGES
+
+    final_rgb *= u_exposure;
+    float vignette = smoothstep(2.8, 0.1, length(uv)); 
+    final_rgb *= mix(1.0, vignette, tidal_force * 0.95);
+
     final_rgb = vec3(1.0) - exp(-final_rgb * 1.8);
     final_rgb = pow(final_rgb, vec3(1.0 / 1.25));
     fragColor = vec4(final_rgb, 1.0);
@@ -269,26 +405,71 @@ program = ctx.program(vertex_shader=VERTEX_SHADER, fragment_shader=FRAGMENT_SHAD
 vbo = ctx.buffer(vertices)
 vao = ctx.vertex_array(program, vbo, 'in_vert')
 
+# --- SHADER 2D OVERLAY MIXER PROGRAM ---
+VERTEX_UI_SHADER = """
+#version 330
+in vec2 in_vert;
+out vec2 tex_coord;
+void main() {
+    tex_coord = (in_vert + 1.0) * 0.5;
+    gl_Position = vec4(in_vert, 0.0, 1.0);
+}
+"""
+FRAGMENT_UI_SHADER = """
+#version 330
+in vec2 tex_coord;
+uniform sampler2D u_ui_texture;
+out vec4 fragColor;
+void main() {
+    vec4 ui_color = texture(u_ui_texture, tex_coord);
+    if(ui_color.a < 0.01) discard; 
+    fragColor = ui_color;
+}
+"""
+ui_program = ctx.program(vertex_shader=VERTEX_UI_SHADER, fragment_shader=FRAGMENT_UI_SHADER)
+ui_vbo = ctx.buffer(vertices)
+ui_vao = ctx.vertex_array(ui_program, ui_vbo, 'in_vert')
+ui_texture = None
+
+# Multi-Black Hole Data Structure System Array
+blackholes = [
+    {
+        "pos": np.array([0.0, 0.0, 0.0], dtype=float),
+        "shadow_size": 3.0,
+        "lens_strength": 1.0,
+        "turbulence": 1.32,
+        "ring_sharpness": 250.0,
+        "accretion_enabled": 1,
+        "doppler_blue": 1.0
+    }
+]
+selected_bh_idx = 0
+
 # System Variable Structures
 mouse_x, mouse_y = 0.5, 0.44
 zoom = 38.0
 tilt = 0.0
 speed_multiplier = 1.0
-ring_sharpness = 250.0
 bloom_intensity = 1.25
 lens_strength = 1.0
-turbulence = 1.32
 star_density = 1.0
+low_quality_mode = 0
+
+# Exposure Control Attributes
+current_exposure = 1.0
+target_exposure = 1.0
+
+# Cinematic Camera Pivot Points
+camera_target = np.array([0.0, 0.0, 0.0], dtype=float)
+target_camera_target = np.array([0.0, 0.0, 0.0], dtype=float)
 
 # Inertial Target Smooth Maps
 target_mouse_x, target_mouse_y = mouse_x, mouse_y
 target_zoom = zoom
 target_tilt = tilt
 target_speed_multiplier = speed_multiplier
-target_ring_sharpness = ring_sharpness
 target_bloom_intensity = bloom_intensity
 target_lens_strength = lens_strength
-target_turbulence = turbulence
 target_star_density = star_density
 
 # Flight Parameter Layout maps
@@ -303,6 +484,7 @@ surf_tilt = 0.0
 target_surf_tilt = surf_tilt
 
 is_dragging = False
+is_panning = False
 custom_time = 0.0
 surf_speed = 14.0
 mouse_sensitivity = 0.0015
@@ -316,23 +498,53 @@ saved_tilt = 0.0
 fullscreen_active = False
 pre_fs_width, pre_fs_height = SCREEN_WIDTH, SCREEN_HEIGHT
 
+# --- SIDE PANEL UI STATE CONFIGURATION ---
+ui_open = False
+ui_width = 340
+ui_animation_progress = 0.0
+active_slider = None
+
+ui_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+font_title = pygame.font.SysFont("Segoe UI, SF Pro, Arial", 21, bold=True)
+font_subtitle = pygame.font.SysFont("Segoe UI, SF Pro, Arial", 11, bold=False)
+font_label = pygame.font.SysFont("Segoe UI, SF Pro, Arial", 13, bold=True)
+font_value = pygame.font.SysFont("Segoe UI, SF Pro, Arial", 13)
+font_badge = pygame.font.SysFont("Segoe UI, SF Pro, Arial", 10, bold=True)
+
 
 def reset_engine_parameters_smooth():
     global target_mouse_x, target_mouse_y, target_zoom, target_tilt
-    global target_speed_multiplier, target_ring_sharpness, target_bloom_intensity
-    global target_lens_strength, target_turbulence, target_star_density
+    global target_speed_multiplier, target_bloom_intensity
+    global target_lens_strength, target_star_density
     global target_surf_pos, target_surf_yaw, target_surf_pitch, target_surf_tilt, surf_active, surf_speed
+    global target_exposure, current_exposure, low_quality_mode, blackholes, selected_bh_idx
+    global target_camera_target
 
     target_mouse_x, target_mouse_y = 0.5, 0.44
     target_zoom = 38.0
     target_tilt = 0.0
     target_speed_multiplier = 1.0
-    target_ring_sharpness = 250.0
     target_bloom_intensity = 1.25
     target_lens_strength = 1.0
-    target_turbulence = 1.32
     target_star_density = 1.0
     surf_speed = 14.0
+    target_exposure = 1.0
+    current_exposure = 1.0
+    low_quality_mode = 0
+    selected_bh_idx = 0
+    target_camera_target = np.array([0.0, 0.0, 0.0], dtype=float)
+
+    blackholes = [
+        {
+            "pos": np.array([0.0, 0.0, 0.0], dtype=float),
+            "shadow_size": 3.0,
+            "lens_strength": 1.0,
+            "turbulence": 1.32,
+            "ring_sharpness": 250.0,
+            "accretion_enabled": 1,
+            "doppler_blue": 1.0
+        }
+    ]
 
     if surf_active:
         target_surf_pos = np.array([0.0, 1.8, 17.5], dtype=float)
@@ -342,22 +554,28 @@ def reset_engine_parameters_smooth():
 
 
 def update_interpolations(dt):
-    global mouse_x, mouse_y, zoom, tilt, speed_multiplier, ring_sharpness, bloom_intensity
-    global lens_strength, turbulence, star_density
+    global mouse_x, mouse_y, zoom, tilt, speed_multiplier, bloom_intensity
+    global lens_strength, star_density
     global surf_pos, surf_yaw, surf_pitch, surf_tilt
+    global current_exposure, target_exposure, ui_animation_progress
+    global camera_target
 
     blend = 1.0 - math.exp(-smoothing_factor * dt)
 
+    camera_target += (target_camera_target - camera_target) * blend
     mouse_x += (target_mouse_x - mouse_x) * blend
     mouse_y += (target_mouse_y - mouse_y) * blend
     zoom += (target_zoom - zoom) * blend
     tilt += (target_tilt - tilt) * blend
     speed_multiplier += (target_speed_multiplier - speed_multiplier) * blend
-    ring_sharpness += (target_ring_sharpness - ring_sharpness) * blend
     bloom_intensity += (target_bloom_intensity - bloom_intensity) * blend
     lens_strength += (target_lens_strength - lens_strength) * blend
-    turbulence += (target_turbulence - turbulence) * blend
     star_density += (target_star_density - star_density) * blend
+
+    current_exposure = current_exposure + (target_exposure - current_exposure) * (1.0 - math.exp(-3.5 * dt))
+
+    ui_target = 1.0 if ui_open else 0.0
+    ui_animation_progress += (ui_target - ui_animation_progress) * (1.0 - math.exp(-12.0 * dt))
 
     if surf_active:
         surf_pos += (target_surf_pos - surf_pos) * blend
@@ -375,6 +593,7 @@ def compute_camera_vectors():
 
         world_up = np.array([0.0, 1.0, 0.0])
         cam_right = np.cross(cam_dir, world_up)
+
         if np.linalg.norm(cam_right) < 0.001:
             cam_right = np.array([1.0, 0.0, 0.0])
         else:
@@ -384,13 +603,15 @@ def compute_camera_vectors():
         cam_up = up_temp * math.cos(surf_tilt) + cam_right * math.sin(surf_tilt)
         final_right = normalize_vec(np.cross(cam_dir, cam_up))
         final_up = normalize_vec(np.cross(final_right, cam_dir))
+
         return surf_pos, cam_dir, final_up, final_right
     else:
         theta = mouse_y * math.pi
         phi = mouse_x * 2.0 * math.pi
-        ro = np.array([math.sin(theta) * math.sin(phi), math.cos(theta), math.sin(theta) * math.cos(phi)]) * zoom
+        ro = camera_target + np.array(
+            [math.sin(theta) * math.sin(phi), math.cos(theta), math.sin(theta) * math.cos(phi)]) * zoom
 
-        ww = normalize_vec(-ro)
+        ww = normalize_vec(camera_target - ro)
         base_up = np.array([0.0, 1.0, 0.0])
         right_temp = normalize_vec(np.cross(ww, base_up))
         up_temp = np.cross(right_temp, ww)
@@ -399,6 +620,21 @@ def compute_camera_vectors():
         uu = normalize_vec(np.cross(ww, cam_up))
         vv = normalize_vec(np.cross(uu, ww))
         return ro, ww, vv, uu
+
+
+def project_3d_to_2d(bh_pos, cam_pos, cam_dir, cam_up, cam_right, width, height):
+    to_bh = bh_pos - cam_pos
+    dist_forward = np.dot(to_bh, cam_dir)
+    if dist_forward <= 0.2:
+        return None
+
+    proj_x = np.dot(to_bh, cam_right) / dist_forward * 2.0
+    proj_y = np.dot(to_bh, cam_up) / dist_forward * 2.0
+
+    aspect = width / height
+    screen_x = ((proj_x / aspect) + 1.0) * 0.5 * width
+    screen_y = (1.0 - (proj_y + 1.0) * 0.5) * height
+    return int(screen_x), int(screen_y)
 
 
 def normalize_vec(v):
@@ -413,11 +649,215 @@ def upload_uniform_blocks(width, height, c_pos, c_dir, c_up, c_right):
     program['u_cam_up'].value = tuple(c_up)
     program['u_cam_right'].value = tuple(c_right)
     program['u_time'].value = custom_time
-    program['u_ring_sharpness'].value = ring_sharpness
     program['u_bloom_intensity'].value = bloom_intensity
     program['u_lens_strength'].value = lens_strength
-    program['u_turbulence'].value = turbulence
     program['u_star_density'].value = star_density
+    program['u_exposure'].value = current_exposure
+    program['u_low_quality'].value = low_quality_mode
+
+    num_bh = len(blackholes)
+    program['u_num_bh'].value = num_bh
+
+    bh_pos = []
+    bh_shadow_size = []
+    bh_lens_strength = []
+    bh_turbulence = []
+    bh_ring_sharpness = []
+    bh_accretion_enabled = []
+    bh_doppler_blue = []
+
+    for i in range(4):
+        if i < num_bh:
+            bh = blackholes[i]
+            bh_pos.append(tuple(bh["pos"]))
+            bh_shadow_size.append(float(bh["shadow_size"]))
+            bh_lens_strength.append(float(bh["lens_strength"]))
+            bh_turbulence.append(float(bh["turbulence"]))
+            bh_ring_sharpness.append(float(bh["ring_sharpness"]))
+            bh_accretion_enabled.append(int(bh["accretion_enabled"]))
+            bh_doppler_blue.append(float(bh["doppler_blue"]))
+        else:
+            bh_pos.append((0.0, 0.0, 0.0))
+            bh_shadow_size.append(1.0)
+            bh_lens_strength.append(1.0)
+            bh_turbulence.append(1.0)
+            bh_ring_sharpness.append(100.0)
+            bh_accretion_enabled.append(0)
+            bh_doppler_blue.append(1.0)
+
+    program['u_bh_pos'].value = bh_pos
+    program['u_bh_shadow_size'].value = bh_shadow_size
+    program['u_bh_lens_strength'].value = bh_lens_strength
+    program['u_bh_turbulence'].value = bh_turbulence
+    program['u_bh_ring_sharpness'].value = bh_ring_sharpness
+    program['u_bh_accretion_enabled'].value = bh_accretion_enabled
+    program['u_bh_doppler_blue'].value = bh_doppler_blue
+
+
+def calculate_adaptive_exposure(c_pos, c_dir):
+    if len(blackholes) == 0: return 1.0
+
+    closest_dist = 9999.0
+    closest_bh = blackholes[0]
+    for bh in blackholes:
+        dist = np.linalg.norm(c_pos - bh["pos"])
+        if dist < closest_dist:
+            closest_dist = dist
+            closest_bh = bh
+
+    target_norm = normalize_vec(closest_bh["pos"] - c_pos)
+    alignment = max(0.0, float(np.dot(c_dir, target_norm)))
+    proximity_intensity = 1.0 / max(1.0, closest_dist - 4.0)
+    luminance_weight = alignment * proximity_intensity * 12.0
+    clamped_target = 1.0 / (1.0 + luminance_weight)
+    return max(0.08, min(1.8, clamped_target * 1.35))
+
+
+def draw_premium_slider(surf, x, y, w, h, progress, label_text, value_text, hotkey_text, is_active):
+    lbl = font_label.render(label_text, True, (245, 247, 255) if is_active else (210, 212, 220))
+    surf.blit(lbl, (x, y - 22))
+
+    badge_bg_color = (65, 68, 85) if is_active else (38, 40, 48)
+    badge_txt_color = (255, 255, 255) if is_active else (150, 155, 168)
+    bdg = font_badge.render(hotkey_text, True, badge_txt_color)
+    bdg_w = bdg.get_width() + 10
+    bdg_h = bdg.get_height() + 4
+    bdg_x = x + lbl.get_width() + 8
+    bdg_y = y - 22 + (lbl.get_height() - bdg_h) // 2
+    pygame.draw.rect(surf, badge_bg_color, (bdg_x, bdg_y, bdg_w, bdg_h), border_radius=5)
+    surf.blit(bdg, (bdg_x + 5, bdg_y + 2))
+
+    val = font_value.render(value_text, True, (255, 255, 255) if is_active else (160, 165, 175))
+    surf.blit(val, (x + w - val.get_width(), y - 22))
+
+    track_h = 4
+    track_y = y + (h - track_h) // 2
+    pygame.draw.rect(surf, (30, 31, 36), (x, track_y, w, track_h), border_radius=2)
+
+    fill_w = int(w * progress)
+    if fill_w > 0:
+        fill_color = (255, 255, 255) if is_active else (195, 200, 210)
+        pygame.draw.rect(surf, fill_color, (x, track_y, fill_w, track_h), border_radius=2)
+
+    thumb_x = x + int(w * progress)
+    thumb_x = max(x, min(x + w, thumb_x))
+    thumb_y = y + h // 2
+
+    pygame.draw.circle(surf, (255, 255, 255), (thumb_x, thumb_y), 8)
+    pygame.draw.circle(surf, (15, 16, 20), (thumb_x, thumb_y), 6)
+    center_dot_color = (255, 255, 255) if is_active else (90, 95, 105)
+    pygame.draw.circle(surf, center_dot_color, (thumb_x, thumb_y), 3)
+
+
+def get_slider_defs():
+    bh = blackholes[selected_bh_idx]
+    current_thickness_pct = (1000.0 - bh["ring_sharpness"]) / (1000.0 - 40.0)
+    shadow_pct = (bh["shadow_size"] - 0.5) / (8.0 - 0.5)
+
+    return [
+        {"id": "shadow", "label": "Shadow Size (Horizon)", "hotkey": "[ / ]", "val": shadow_pct, "min": 0.5, "max": 8.0,
+         "str": f"{bh['shadow_size']:.2f}"},
+        {"id": "lens", "label": "Gravity Lensing Strength", "hotkey": "1 / 2", "val": bh["lens_strength"] / 4.0,
+         "min": 0.0, "max": 4.0,
+         "str": f"{bh['lens_strength']:.2f}"},
+        {"id": "turb", "label": "Turbulence Scale", "hotkey": "3 / 4", "val": (bh["turbulence"] - 0.1) / 3.4,
+         "min": 0.1, "max": 3.5,
+         "str": f"{bh['turbulence']:.2f}"},
+        {"id": "doppler", "label": "Doppler Blueshift", "hotkey": "7 / 8", "val": bh["doppler_blue"] / 3.0, "min": 0.0,
+         "max": 3.0, "str": f"{bh['doppler_blue']:.2f}"},
+        {"id": "thickness", "label": "Ring Thickness", "hotkey": "LF / RT", "val": current_thickness_pct, "min": 0.0,
+         "max": 1.0, "str": f"{current_thickness_pct * 100:.0f}%"}
+    ]
+
+
+def handle_ui_clicks(m_pos, is_moving=False):
+    global active_slider
+
+    if ui_animation_progress < 0.05:
+        return False
+
+    panel_x = SCREEN_WIDTH - int(ui_width * ui_animation_progress)
+    mx, my = m_pos
+
+    if mx < panel_x:
+        return False
+
+    slider_w = 270
+    slider_h = 8
+    start_y = 135
+    spacing = 68
+
+    sliders = get_slider_defs()
+
+    if not is_moving:
+        active_slider = None
+        for i, sld in enumerate(sliders):
+            sy = start_y + i * spacing
+            sx = panel_x + 35
+            if sx <= mx <= sx + slider_w and sy - 12 <= my <= sy + slider_h + 12:
+                active_slider = sld["id"]
+                break
+
+    if active_slider:
+        sx = panel_x + 35
+        pct = max(0.0, min(1.0, (mx - sx) / slider_w))
+        bh = blackholes[selected_bh_idx]
+
+        if active_slider == "shadow":
+            bh["shadow_size"] = 0.5 + pct * (8.0 - 0.5)
+        elif active_slider == "lens":
+            bh["lens_strength"] = 0.0 + pct * (4.0 - 0.0)
+        elif active_slider == "turb":
+            bh["turbulence"] = 0.1 + pct * (3.5 - 0.1)
+        elif active_slider == "doppler":
+            bh["doppler_blue"] = 0.0 + pct * (3.0 - 0.0)
+        elif active_slider == "thickness":
+            bh["ring_sharpness"] = 1000.0 - pct * (1000.0 - 40.0)
+        return True
+
+    return True
+
+
+def render_ui_to_surface():
+    ui_surface.fill((0, 0, 0, 0))
+    if ui_animation_progress <= 0.005:
+        return False
+
+    current_panel_w = int(ui_width * ui_animation_progress)
+    panel_x = SCREEN_WIDTH - current_panel_w
+
+    pygame.draw.rect(ui_surface, (12, 13, 17, 245), (panel_x, 15, current_panel_w + 50, SCREEN_HEIGHT - 30),
+                     border_radius=24)
+    pygame.draw.rect(ui_surface, (72, 75, 88, 160), (panel_x, 15, current_panel_w + 50, SCREEN_HEIGHT - 30), width=1,
+                     border_radius=24)
+
+    if ui_animation_progress > 0.5:
+        title_txt = font_title.render("Control Panel", True, (255, 255, 255))
+        ui_surface.blit(title_txt, (panel_x + 35, 45))
+
+        quality_str = "BALANCED" if low_quality_mode == 1 else "ULTRA"
+        header_meta = f"PROFILE: {quality_str} | NODE: #{selected_bh_idx + 1}/{len(blackholes)}"
+        sub_txt = font_subtitle.render(header_meta, True, (45, 180, 220) if low_quality_mode == 1 else (115, 120, 135))
+        ui_surface.blit(sub_txt, (panel_x + 35, 74))
+
+        pygame.draw.line(ui_surface, (38, 40, 48), (panel_x + 35, 92), (panel_x + 305, 92), 1)
+
+        sliders = get_slider_defs()
+        start_y = 135
+        spacing = 68
+
+        for i, sld in enumerate(sliders):
+            progress = sld["val"]
+            is_active = (active_slider == sld["id"])
+            draw_premium_slider(ui_surface, panel_x + 35, start_y + i * spacing, 270, 8, progress, sld["label"],
+                                sld["str"], sld["hotkey"], is_active)
+
+        pygame.draw.line(ui_surface, (38, 40, 48), (panel_x + 35, SCREEN_HEIGHT - 65),
+                         (panel_x + 305, SCREEN_HEIGHT - 65), 1)
+        dismiss_txt = font_subtitle.render("PRESS [N] TO SPAWN ANOTHER SINGULARITY", True, (100, 105, 118))
+        ui_surface.blit(dismiss_txt, (panel_x + 35, SCREEN_HEIGHT - 52))
+
+    return True
 
 
 def save_cinematic_screenshot():
@@ -446,80 +886,189 @@ def save_cinematic_screenshot():
     image_bytes = fbo.read(components=4)
     ss_surface = pygame.image.fromstring(image_bytes, (ss_width, ss_height), "RGBA", True)
 
-    full_path = os.path.join(target_dir, f"Gargantua_Volumetric3D_4K_{int(time.time())}.png")
+    full_path = os.path.join(target_dir, f"Gargantua_MultiMatrix_4K_{int(time.time())}.png")
     pygame.image.save(ss_surface, full_path)
     print(f"Cinematic UHD 4K render exported successfully: {full_path}")
     ctx.screen.use()
 
 
+# Initialize state parameters
 running = True
+ui_click_captured = False
+
 while running:
     dt_frame = clock.tick(60) / 1000.0
     dt_frame = min(0.05, dt_frame)
+
+    closest_dist = 9999.0
+    for bh in blackholes:
+        d = np.linalg.norm(surf_pos - bh["pos"]) if surf_active else 100.0
+        if d < closest_dist:
+            closest_dist = d
+
+    tidal_force = 0.0
+
+    if surf_active and closest_dist < 18.0:
+        tidal_force = max(0.0, 1.0 - (closest_dist - 2.0) / 16.0)
+        dt_frame *= (1.0 - tidal_force * 0.92)
+
     custom_time += dt_frame * speed_multiplier
+
+    mouse_pos = pygame.mouse.get_pos()
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
 
-        # FIX: Track manual window resize actions from user mouse drag events
         elif event.type == pygame.VIDEORESIZE:
             SCREEN_WIDTH, SCREEN_HEIGHT = event.w, event.h
             ctx.viewport = (0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
+            ui_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            if ui_texture:
+                ui_texture.release()
+                ui_texture = None
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button == 1 and not surf_active:
-                is_dragging = True
+            if event.button == 1:
+                ui_click_captured = handle_ui_clicks(mouse_pos, is_moving=False)
+                if not ui_click_captured:
+                    c_pos, c_dir, c_up, c_right = compute_camera_vectors()
+                    closest_node_idx = -1
+                    min_screen_dist = 99999.0
 
-            if event.button == 4:
+                    for idx, bh in enumerate(blackholes):
+                        proj_coords = project_3d_to_2d(bh["pos"], c_pos, c_dir, c_up, c_right, SCREEN_WIDTH,
+                                                       SCREEN_HEIGHT)
+                        if proj_coords:
+                            sx, sy = proj_coords
+                            dist = math.hypot(mouse_pos[0] - sx, mouse_pos[1] - sy)
+                            if dist < min_screen_dist:
+                                min_screen_dist = dist
+                                closest_node_idx = idx
+
+                    if closest_node_idx != -1 and min_screen_dist < 90.0:
+                        selected_bh_idx = closest_node_idx
+                        target_camera_target = np.copy(blackholes[selected_bh_idx]["pos"])
+                        print(f"Active Selection Switched -> Black Hole #{selected_bh_idx + 1}")
+                    elif not surf_active:
+                        is_dragging = True
+
+            elif event.button == 2 and not ui_click_captured and not surf_active:
+                is_panning = True
+
+            elif event.button == 4 and not ui_click_captured:
                 if surf_active:
                     surf_speed = min(150.0, surf_speed + 2.5)
                 else:
-                    target_zoom = max(38.0, target_zoom - 4.5)
+                    target_zoom = max(10.0, target_zoom - 4.5)
 
-            if event.button == 5:
+            elif event.button == 5 and not ui_click_captured:
                 if surf_active:
                     surf_speed = max(1.0, surf_speed - 2.5)
                 else:
-                    target_zoom = min(220.0, target_zoom + 4.5)
+                    target_zoom = min(400.0, target_zoom + 4.5)
 
         elif event.type == pygame.MOUSEBUTTONUP:
-            if event.button == 1: is_dragging = False
+            if event.button == 1:
+                is_dragging = False
+                ui_click_captured = False
+                active_slider = None
+            elif event.button == 2:
+                is_panning = False
 
         elif event.type == pygame.MOUSEMOTION:
-            if surf_active:
+            if ui_click_captured:
+                handle_ui_clicks(mouse_pos, is_moving=True)
+            elif surf_active:
                 dx, dy = event.rel
                 target_surf_yaw += dx * mouse_sensitivity
                 target_surf_pitch = max(-math.pi / 2.1, min(math.pi / 2.1, target_surf_pitch - dy * mouse_sensitivity))
+            elif is_panning:
+                dx, dy = event.rel
+                c_pos, c_dir, c_up, c_right = compute_camera_vectors()
+                pan_speed = zoom * 0.0015
+                target_camera_target -= c_right * dx * pan_speed
+                target_camera_target += c_up * dy * pan_speed
             elif is_dragging:
                 dx, dy = event.rel
                 target_mouse_x += dx * (0.45 / SCREEN_WIDTH)
-                target_mouse_y = max(0.08, min(0.92, target_mouse_y - dy * (0.45 / SCREEN_HEIGHT)))
+                target_mouse_y = max(0.05, min(0.95, target_mouse_y - dy * (0.45 / SCREEN_HEIGHT)))
 
         elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_3:
-                target_lens_strength = max(0.1, target_lens_strength - 0.15)
+            if event.key == pygame.K_F1:
+                low_quality_mode = 1 if low_quality_mode == 0 else 0
+                print(f"Engine Profile Modified. Balanced Performance Active: {bool(low_quality_mode)}")
+
+            elif event.key == pygame.K_n:
+                if len(blackholes) < 4:
+                    c_pos, c_dir, _, _ = compute_camera_vectors()
+                    spawn_coordinates = c_pos + c_dir * 30.0
+
+                    can_spawn = True
+                    for bh in blackholes:
+                        safe_dist = bh["shadow_size"] * 4.0 + 5.0
+                        if np.linalg.norm(spawn_coordinates - bh["pos"]) < safe_dist:
+                            can_spawn = False
+                            break
+
+                    if can_spawn:
+                        blackholes.append({
+                            "pos": np.copy(spawn_coordinates),
+                            "shadow_size": 3.0,
+                            "lens_strength": 1.0,
+                            "turbulence": 1.32,
+                            "ring_sharpness": 250.0,
+                            "accretion_enabled": 1,
+                            "doppler_blue": 1.0
+                        })
+                        selected_bh_idx = len(blackholes) - 1
+                        target_camera_target = np.copy(blackholes[selected_bh_idx]["pos"])
+                        print(f"Spawned Black Hole #{len(blackholes)} at Space Vector: {spawn_coordinates}")
+                    else:
+                        print("WARNING: Spawning Aborted. Space-time coordinates too close to an existing Singularity!")
+
+            elif event.key == pygame.K_b:
+                bh = blackholes[selected_bh_idx]
+                bh["accretion_enabled"] = 1 if bh["accretion_enabled"] == 0 else 0
+                print(f"Accretion Toggled for Selected Node #{selected_bh_idx + 1}: {bool(bh['accretion_enabled'])}")
+
+            elif event.key == pygame.K_LCTRL or event.key == pygame.K_RCTRL:
+                ui_open = not ui_open
+
+            elif event.key == pygame.K_1:
+                blackholes[selected_bh_idx]["lens_strength"] = max(0.0,
+                                                                   blackholes[selected_bh_idx]["lens_strength"] - 0.15)
+            elif event.key == pygame.K_2:
+                blackholes[selected_bh_idx]["lens_strength"] = min(4.0,
+                                                                   blackholes[selected_bh_idx]["lens_strength"] + 0.15)
+            elif event.key == pygame.K_3:
+                blackholes[selected_bh_idx]["turbulence"] = max(0.1, blackholes[selected_bh_idx]["turbulence"] - 0.15)
             elif event.key == pygame.K_4:
-                target_lens_strength = min(4.0, target_lens_strength + 0.15)
+                blackholes[selected_bh_idx]["turbulence"] = min(3.5, blackholes[selected_bh_idx]["turbulence"] + 0.15)
             elif event.key == pygame.K_5:
-                target_turbulence = max(0.1, target_turbulence - 0.15)
+                star_density = max(0.0, star_density - 0.2)
             elif event.key == pygame.K_6:
-                target_turbulence = min(3.5, target_turbulence + 0.15)
+                star_density = min(5.0, star_density + 0.2)
             elif event.key == pygame.K_7:
-                target_star_density = max(0.0, target_star_density - 0.2)
+                blackholes[selected_bh_idx]["doppler_blue"] = max(0.0,
+                                                                  blackholes[selected_bh_idx]["doppler_blue"] - 0.15)
             elif event.key == pygame.K_8:
-                target_star_density = min(5.0, target_star_density + 0.2)
+                blackholes[selected_bh_idx]["doppler_blue"] = min(3.0,
+                                                                  blackholes[selected_bh_idx]["doppler_blue"] + 0.15)
+            elif event.key == pygame.K_LEFTBRACKET:
+                blackholes[selected_bh_idx]["shadow_size"] = max(0.5, blackholes[selected_bh_idx]["shadow_size"] - 0.15)
+            elif event.key == pygame.K_RIGHTBRACKET:
+                blackholes[selected_bh_idx]["shadow_size"] = min(8.0, blackholes[selected_bh_idx]["shadow_size"] + 0.15)
+
             elif event.key == pygame.K_F12:
                 save_cinematic_screenshot()
             elif event.key == pygame.K_F9:
                 reset_engine_parameters_smooth()
 
-            # FIX: F11 Key implementation toggles dynamic Windowed Fullscreen mode
             elif event.key == pygame.K_F11:
                 fullscreen_active = not fullscreen_active
                 if fullscreen_active:
                     pre_fs_width, pre_fs_height = SCREEN_WIDTH, SCREEN_HEIGHT
-                    # Get display info for desktop windowed fullscreen sizing dimensions
                     info = pygame.display.Info()
                     SCREEN_WIDTH, SCREEN_HEIGHT = info.current_w, info.current_h
                     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT),
@@ -529,8 +1078,12 @@ while running:
                     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT),
                                                      pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE)
                 ctx.viewport = (0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
+                ui_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+                if ui_texture:
+                    ui_texture.release()
+                    ui_texture = None
 
-            elif event.key == pygame.K_F10:
+            elif event.key == pygame.K_TAB:
                 surf_active = not surf_active
                 if surf_active:
                     saved_mouse_x, saved_mouse_y = mouse_x, mouse_y
@@ -539,11 +1092,11 @@ while running:
 
                     theta = mouse_y * math.pi
                     phi = mouse_x * 2.0 * math.pi
-                    surf_pos = np.array(
+                    surf_pos = camera_target + np.array(
                         [math.sin(theta) * math.sin(phi), math.cos(theta), math.sin(theta) * math.cos(phi)]) * zoom
                     target_surf_pos = np.copy(surf_pos)
 
-                    look_at_center = normalize_vec(-surf_pos)
+                    look_at_center = normalize_vec(camera_target - surf_pos)
                     surf_yaw = math.atan2(look_at_center[2], look_at_center[0])
                     target_surf_yaw = surf_yaw
                     surf_pitch = math.asin(look_at_center[1])
@@ -567,7 +1120,6 @@ while running:
         dir_y = math.sin(surf_pitch)
         dir_z = math.cos(surf_pitch) * math.sin(surf_yaw)
         forward = np.array([dir_x, dir_y, dir_z])
-
         world_up = np.array([0.0, 1.0, 0.0])
         right = normalize_vec(np.cross(forward, world_up))
 
@@ -582,25 +1134,53 @@ while running:
     else:
         if keys[pygame.K_a]: target_tilt -= 1.8 * dt_frame
         if keys[pygame.K_d]: target_tilt += 1.8 * dt_frame
-        if keys[pygame.K_UP]: target_speed_multiplier = min(45.0, target_speed_multiplier + max(0.1,
-                                                                                                abs(target_speed_multiplier) * 0.12))
-        if keys[pygame.K_DOWN]: target_speed_multiplier = max(-15.0, target_speed_multiplier - max(0.1,
-                                                                                                   abs(target_speed_multiplier) * 0.12))
-        if keys[pygame.K_RIGHT]: target_ring_sharpness = min(1000.0, target_ring_sharpness + 8.0)
-        if keys[pygame.K_LEFT]: target_ring_sharpness = max(40.0, target_ring_sharpness - 8.0)
-        if keys[pygame.K_w]: target_bloom_intensity = min(4.0, target_bloom_intensity + 0.08)
-        if keys[pygame.K_s]: target_bloom_intensity = max(0.0, target_bloom_intensity - 0.08)
+
+        if keys[pygame.K_LEFT]:
+            blackholes[selected_bh_idx]["ring_sharpness"] = min(1000.0,
+                                                                blackholes[selected_bh_idx]["ring_sharpness"] + 8.0)
+        if keys[pygame.K_RIGHT]:
+            blackholes[selected_bh_idx]["ring_sharpness"] = max(40.0,
+                                                                blackholes[selected_bh_idx]["ring_sharpness"] - 8.0)
+
+        if keys[pygame.K_w]: bloom_intensity = min(4.0, bloom_intensity + 0.08)
+        if keys[pygame.K_s]: bloom_intensity = max(0.0, bloom_intensity - 0.08)
         target_mouse_x = target_mouse_x % 1.0
 
+    pos, direct, up, right = compute_camera_vectors()
+
+    if tidal_force > 0.01:
+        shake_amplitude = 0.35 * (tidal_force ** 2)
+        jitter_vec = np.array([
+            (np.random.rand() - 0.5),
+            (np.random.rand() - 0.5),
+            (np.random.rand() - 0.5)
+        ]) * shake_amplitude
+        pos = pos + jitter_vec
+
+    target_exposure = calculate_adaptive_exposure(pos, direct)
     update_interpolations(dt_frame)
 
     ctx.clear(0.0, 0.0, 0.0)
-
-    pos, direct, up, right = compute_camera_vectors()
     upload_uniform_blocks(SCREEN_WIDTH, SCREEN_HEIGHT, pos, direct, up, right)
-
     vao.render(moderngl.TRIANGLES)
+
+    if render_ui_to_surface():
+        ui_data = pygame.image.tostring(ui_surface, "RGBA", True)
+
+        if not ui_texture:
+            ui_texture = ctx.texture((SCREEN_WIDTH, SCREEN_HEIGHT), 4, data=ui_data)
+            ui_texture.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        else:
+            ui_texture.write(ui_data)
+
+        ctx.enable(moderngl.BLEND)
+        ui_texture.use(0)
+        ui_vao.render(moderngl.TRIANGLES)
+        ctx.disable(moderngl.BLEND)
+
     pygame.display.flip()
 
+if ui_texture:
+    ui_texture.release()
 pygame.quit()
 sys.exit()
