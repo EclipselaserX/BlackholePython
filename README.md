@@ -17,6 +17,9 @@ Adjustable lensing and star density controls
 <img width="3840" height="2160" alt="Gargantua_MultiMatrix_3840x2160_1783141788" src="https://github.com/user-attachments/assets/4f3eccf2-a120-409c-a4f2-d331037fc395" />
 <img width="3840" height="2160" alt="Gargantua_MultiMatrix_3840x2160_1783141820" src="https://github.com/user-attachments/assets/a6c90959-5efc-44ac-8695-2abc4030cce2" />
 Screenshot mode
+<img width="1364" height="706" alt="image" src="https://github.com/user-attachments/assets/02da2256-649e-4a61-a11c-eec077e81ade" />
+Render Animations via cam movement
+
 Prerequisites
 Python 3.8+
 moderngl
