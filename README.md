@@ -19,6 +19,9 @@ Adjustable lensing and star density controls
 <img width="1364" height="706" alt="image" src="https://github.com/user-attachments/assets/02da2256-649e-4a61-a11c-eec077e81ade" />
 Render Animations via cam movement
 
+
+AI Disclosure: I Designed the Simulator and Fragment shader mainly, Most of the code was written by AI agents
+
 Prerequisites
 Python 3.8+
 moderngl
